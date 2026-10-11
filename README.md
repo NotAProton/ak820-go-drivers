@@ -16,8 +16,7 @@ expose one).
 - All 22 lighting modes plus custom per-key RGB (every key individually)
 - Palette colors, brightness, speed, direction
 - Sleep timer, key response time, Fn switch, factory reset
-- `whack-a-mole` on the physical keyboard
-- Audio spectrum visualizer (18 bars via [cava](https://github.com/karlstav/cava))
+- `pipe` — a streaming frame primitive for companion tools
 - Agent-friendly: `--json` everywhere, `--dry-run`, `agent-context` manifest,
   stable exit codes, errors that enumerate valid values
 
@@ -46,13 +45,14 @@ ak820 get battery                # percent + connection state
 ak820 set mode 5                 # spectral cycle
 ak820 set mode 7 --color cyan    # static, cyan
 ak820 set key esc=ff0000 space=green   # custom per-key colors
-ak820 game                       # whack-a-mole on the real keys
-ak820 visualizer --theme ocean   # music reactive
 ak820 agent-context              # machine-readable capability manifest
 ```
 
 Every data command accepts `--json`; mutations accept `--dry-run` and
 destructive ones (`reset`, `raw`) require `--yes`. See `ak820 --help`.
+
+Playful front-ends (whack-a-mole, audio visualizer) live in the companion
+repository [ak820-utils](https://github.com/NotAProton/ak820-utils).
 
 ## Safety
 
