@@ -1,0 +1,10 @@
+# AK820 Max Plus (URX/AJAZZ) — vendor config interface access
+# Wired:   1a2c:a036 (interfaces 0-2; config channel = MI_02)
+# 2.4G:    1a2c:8fff (config channel = MI_03)
+# Grants user-space write access to all matching hidraw nodes.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1a2c", ATTRS{idProduct}=="a036", MODE="0660", GROUP="uucp", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1a2c", ATTRS{idProduct}=="8fff", MODE="0660", GROUP="uucp", TAG+="uaccess"
+# Bluetooth (uhid): the HID device exposes no idVendor/idProduct attrs,
+# so match the HID bus address in the devpath instead (HID_ID 0005:VID:PID).
+SUBSYSTEM=="hidraw", KERNELS=="0005:1A2C:A036.*", MODE="0660", GROUP="uucp", TAG+="uaccess"
+SUBSYSTEM=="hidraw", KERNELS=="0005:1A2C:8FFF.*", MODE="0660", GROUP="uucp", TAG+="uaccess"

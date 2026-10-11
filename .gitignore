@@ -1,0 +1,11 @@
+# Build artifacts
+/bin/
+
+# Reverse-engineering workspace: vendor driver, extracted payloads, Wine
+# prefix, decompilation notes, and USB captures. Never publish.
+/thirdparty/
+
+# Local scratch
+*.log
+*.pcap
+__pycache__/
