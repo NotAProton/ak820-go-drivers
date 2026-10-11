@@ -11,10 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	gamepkg "github.com/NotAProton/ak820-go-drivers/internal/game"
-	termui "github.com/NotAProton/ak820-go-drivers/internal/termui"
-	vizpkg "github.com/NotAProton/ak820-go-drivers/internal/viz"
 )
 
 const version = "1.0.0"
@@ -64,8 +60,7 @@ Commands:
   set response-time V         1=fast 2=medium 3=slow (experimental)
   apply                       Commit pending changes (0x09)
   fnswitch                    Toggle the Fn-switch state (0x10)
-  game                        Whack-a-mole on the physical keyboard
-  visualizer [--theme T]      Audio spectrum (cava); T: synthwave|ocean|fire
+  pipe                        Stream frames from stdin: "<cmd-hex> <payload-hex>" per line
   reset                       FACTORY RESET (0x08) — requires --yes
   raw --cmd 0xNN [--data HEX] Send a raw frame — requires --yes
   agent-context               Machine-readable capability manifest (JSON)
@@ -396,6 +391,7 @@ func cmdReset(d *dev.Device) (any, error) {
 }
 
 func cmdAgentContext() int {
+	gv.json = true // the manifest is always machine-readable
 	emit(map[string]any{
 		"name":                  "ak820",
 		"version":               version,
@@ -423,6 +419,7 @@ func cmdAgentContext() int {
 			{"name": "agent-context", "json": true},
 			{"name": "version"},
 		},
+		"per_key": keymapJSON(),
 		"enums": map[string]any{
 			"mode":          p.ModeList(),
 			"color":         p.PaletteList(),
@@ -527,66 +524,11 @@ func run(args []string) int {
 	case "help", "--help", "-h":
 		fmt.Fprint(stdout, usage())
 		return exitOK
-	case "game", "visualizer":
-		if gv.dryRun {
-			return usageErr("--dry-run does not apply to interactive commands")
-		}
-		var node dev.Node
-		var err error
-		deadline := time.Now().Add(gv.wait)
-		for {
-			node, err = dev.PickDevice(gv.device)
-			if err == nil || time.Now().After(deadline) {
-				break
-			}
-			time.Sleep(250 * time.Millisecond)
-		}
-		if err != nil {
-			var nf *dev.DeviceNotFoundError
-			if errors.As(err, &nf) {
-				return notFoundErr(err)
-			}
-			return deviceErr(err)
-		}
-		d, oerr := dev.OpenDevice(node, gv.quiet, func(s string) { logf("%s", s) })
-		if oerr != nil {
-			return deviceErr(oerr)
-		}
-		defer d.Close()
-		if cmdArgs[0] == "game" {
-			if uerr := gamepkg.RequiresTTY(); uerr != nil {
-				return deviceErr(uerr)
-			}
-			state, terr := termui.MakeRaw(os.Stdin.Fd())
-			if terr != nil {
-				return deviceErr(fmt.Errorf("raw terminal mode: %w", terr))
-			}
-			defer state.Restore()
-			kr := termui.NewKeyReader()
-			defer kr.Close()
-			stats := gamepkg.New(d, kr).Run()
-			emit(stats)
-			if !gv.json {
-				fmt.Printf("\nscore %d (high %d)  hits %d  misses %d  accuracy %d%%  avg reaction %dms  reason: %s\n",
-					stats.Score, stats.HighScore, stats.Hits, stats.Misses,
-					stats.Accuracy, stats.AvgReaction, stats.Reason)
-			}
-			return exitOK
-		}
-		theme := "synthwave"
-		for i := 1; i < len(cmdArgs); i++ {
-			if cmdArgs[i] == "--theme" && i+1 < len(cmdArgs) {
-				i++
-				theme = cmdArgs[i]
-			}
-		}
-		if verr := vizpkg.Run(d, theme); verr != nil {
-			return deviceErr(verr)
-		}
-		return exitOK
+	case "pipe":
+		return cmdPipe()
 	case "ping", "get", "set", "apply", "reset", "raw", "fnswitch":
 	default:
-		return usageErr("unknown command %q; valid: list ping get set apply reset raw agent-context version", cmdArgs[0])
+		return usageErr("unknown command %q; valid: list ping get set apply reset raw fnswitch pipe agent-context version", cmdArgs[0])
 	}
 
 	// dev.Device commands. Reads run against the real device even in dry-run;
