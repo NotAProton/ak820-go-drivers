@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	dev "github.com/NotAProton/ak820-go-drivers/internal/device"
@@ -50,33 +51,13 @@ func cmdPipe() int {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		fields := strings.Fields(line)
-		if len(fields) == 0 || len(fields) > 2 {
+		cmd, payload, err := parsePipeLine(line)
+		if err != nil {
 			bad++
-			fmt.Fprintf(stderr, "pipe: malformed line %q (want '<cmd-hex> [payload-hex]')\n", line)
+			fmt.Fprintf(stderr, "pipe: %v\n", err)
 			continue
 		}
-		cmd, err := p.ParseU32(fields[0])
-		if err != nil || cmd > 0xFF {
-			bad++
-			fmt.Fprintf(stderr, "pipe: bad cmd %q: %v\n", fields[0], err)
-			continue
-		}
-		var payload []byte
-		if len(fields) == 2 {
-			payload, err = p.ParseHex(fields[1])
-			if err != nil {
-				bad++
-				fmt.Fprintf(stderr, "pipe: bad payload: %v\n", err)
-				continue
-			}
-			if len(payload) > p.FrameSize-5 {
-				bad++
-				fmt.Fprintf(stderr, "pipe: payload max %d bytes, got %d\n", p.FrameSize-5, len(payload))
-				continue
-			}
-		}
-		if _, err := d.Send(byte(cmd), payload, 0); err != nil {
+		if _, err := d.Send(cmd, payload, 0); err != nil {
 			return deviceErr(err)
 		}
 		sent++
@@ -104,4 +85,33 @@ func keymapJSON() map[string]any {
 		"keys_per_frame": p.SlotCount / 6,
 		"keys":           keys,
 	}
+}
+
+// parsePipeLine parses one pipe input line: "<cmd-hex> [payload-hex]".
+// The command parses as hex with or without a 0x prefix ("0b" and "0x0b"
+// are both 11). Comments (#) and blank lines are handled by the caller.
+func parsePipeLine(line string) (byte, []byte, error) {
+	fields := strings.Fields(line)
+	if len(fields) == 0 || len(fields) > 2 {
+		return 0, nil, fmt.Errorf("malformed line %q (want '<cmd-hex> [payload-hex]')", line)
+	}
+	cs := strings.TrimPrefix(strings.TrimPrefix(fields[0], "0x"), "0X")
+	if cs == "" {
+		return 0, nil, fmt.Errorf("empty cmd in %q", line)
+	}
+	cmd, err := strconv.ParseUint(cs, 16, 8)
+	if err != nil {
+		return 0, nil, fmt.Errorf("bad cmd %q: %w", fields[0], err)
+	}
+	var payload []byte
+	if len(fields) == 2 {
+		payload, err = p.ParseHex(fields[1])
+		if err != nil {
+			return 0, nil, fmt.Errorf("bad payload: %w", err)
+		}
+		if len(payload) > p.FrameSize-5 {
+			return 0, nil, fmt.Errorf("payload max %d bytes, got %d", p.FrameSize-5, len(payload))
+		}
+	}
+	return byte(cmd), payload, nil
 }
