@@ -116,3 +116,57 @@ func TestVendorDescriptor(t *testing.T) {
 		t.Fatal("keyboard descriptor flagged as vendor")
 	}
 }
+
+func TestParseU32Empty(t *testing.T) {
+	if _, err := ParseU32(""); err == nil {
+		t.Fatal("empty string accepted as 0")
+	}
+}
+
+func TestMode23Alias(t *testing.T) {
+	if !ValidMode(23) {
+		t.Fatal("mode 23 must be accepted as custom alias")
+	}
+	fs23, _, err := BuildModeFrames([]string{"23", "--no-apply"})
+	if err != nil {
+		t.Fatalf("mode 23: %v", err)
+	}
+	fs24, _, err := BuildModeFrames([]string{"24", "--no-apply"})
+	if err != nil {
+		t.Fatalf("mode 24: %v", err)
+	}
+	if len(fs23) != len(fs24) || string(fs23[0]) != string(fs24[0]) {
+		t.Fatalf("mode 23 wire frame %x must equal mode 24 %x", fs23[0], fs24[0])
+	}
+}
+
+func TestColorBytesRainbowCase(t *testing.T) {
+	for _, s := range []string{"rainbow", "Rainbow", "RAINBOW"} {
+		_, err := ColorBytes(s)
+		if err == nil {
+			t.Fatalf("%q accepted as per-key color", s)
+		}
+	}
+}
+
+func TestBuildCustomModeFrames(t *testing.T) {
+	var slots [][3]byte = make([][3]byte, SlotCount)
+	fs := BuildCustomModeFrames(slots, 4, 3)
+	if len(fs) != 3+PerKeyFrames {
+		t.Fatalf("custom frames = %d, want %d", len(fs), 3+PerKeyFrames)
+	}
+	if fs[0][4] != CmdSetLightMode || fs[1][4] != CmdCustomModeInit || fs[2][4] != CmdApply {
+		t.Fatalf("custom prefix wrong: %02x %02x %02x", fs[0][4], fs[1][4], fs[2][4])
+	}
+	for i := 0; i < PerKeyFrames; i++ {
+		if fs[3+i][4] != byte(CmdPerKeyCustom0+i) {
+			t.Fatalf("per-key frame %d cmd = %02x", i, fs[3+i][4])
+		}
+	}
+}
+
+func TestGeometryConstants(t *testing.T) {
+	if PerKeyFrames != 6 || KeysPerFrame != 18 || PerKeyFrameLen != 54 {
+		t.Fatalf("geometry constants wrong: %d %d %d", PerKeyFrames, KeysPerFrame, PerKeyFrameLen)
+	}
+}

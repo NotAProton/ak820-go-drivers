@@ -35,24 +35,38 @@ var KeyIndex = map[string]int{
 // buildPerKeyFrames renders the six 0xF6..0xFB frames for a 108-slot RGB
 // buffer (3 bytes per key).
 func BuildPerKeyFrames(slots [][3]byte) [][]byte {
-	frames := make([][]byte, 0, 6)
-	for i := 0; i < 6; i++ {
-		payload := make([]byte, 0, 54)
-		for s := i * 18; s < (i+1)*18 && s < len(slots); s++ {
+	frames := make([][]byte, 0, PerKeyFrames)
+	for i := 0; i < PerKeyFrames; i++ {
+		payload := make([]byte, 0, PerKeyFrameLen)
+		for s := i * KeysPerFrame; s < (i+1)*KeysPerFrame && s < len(slots); s++ {
 			payload = append(payload, slots[s][0], slots[s][1], slots[s][2])
 		}
-		for len(payload) < 54 {
+		for len(payload) < PerKeyFrameLen {
 			payload = append(payload, 0)
 		}
-		frames = append(frames, Frame(byte(0xF6+i), payload))
+		frames = append(frames, Frame(byte(CmdPerKeyCustom0+i), payload))
 	}
 	return frames
+}
+
+// BuildCustomModeFrames returns the full custom per-key upload sequence:
+// set-mode(24) + init + apply + six per-key frames. Single source of truth
+// for the custom path; CLI callers must use this instead of hardcoding
+// 0x07/0x0B/0x09 bytes.
+func BuildCustomModeFrames(slots [][3]byte, brightness, speed byte) [][]byte {
+	frames := [][]byte{
+		Frame(CmdSetLightMode, []byte{byte(CustomMode - 1), brightness, speed, 0, 0}),
+		Frame(CmdCustomModeInit, nil),
+		Frame(CmdApply, nil),
+	}
+	return append(frames, BuildPerKeyFrames(slots)...)
 }
 
 // colorBytes resolves a per-key color: palette name or RRGGBB hex.
 func ColorBytes(s string) ([3]byte, error) {
 	var out [3]byte
-	if idx, ok := Palette[strings.ToLower(s)]; ok && s != "rainbow" {
+	lower := strings.ToLower(s)
+	if idx, ok := Palette[lower]; ok && lower != "rainbow" {
 		switch idx {
 		case 0:
 			out = [3]byte{0xFF, 0x00, 0x00}

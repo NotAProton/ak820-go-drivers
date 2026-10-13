@@ -11,7 +11,7 @@ make vet      # go vet ./...
 make fmt      # gofmt
 ```
 
-All three (test, vet, gofmt-clean) must pass before committing. Go 1.22+,
+All three (test, vet, gofmt-clean) must pass before committing. Go 1.27+,
 stdlib only — do not add dependencies.
 
 ## Layout
@@ -20,8 +20,7 @@ stdlib only — do not add dependencies.
 - `internal/protocol/` — wire format, command table, palette, key map.
   This is the single source of truth for the protocol; never duplicate
   frame-building logic elsewhere.
-- `internal/device/` — hidraw discovery, open/close, framed send/receive
-- `internal/game/`, `internal/viz/`, `internal/termui/` — interactive features
+- `internal/device/` — hidraw discovery, open/close, framed send/receive (exclusive flock, vendor-channel verification)
 
 ## Hardware safety rules
 

@@ -1,4 +1,4 @@
-// Package main implements the AK820 Max Plus vendor-protocol wire format.
+// Package protocol implements the AK820 Max Plus vendor-protocol wire format.
 //
 // Verified live (Linux hidraw, USB wired):
 //   - vendor channel = the USB interface whose HID report descriptor starts
@@ -23,6 +23,11 @@ const (
 	PID24G    = 0x8FFF
 	FrameSize = 64
 	SlotCount = 108 // per-key RGB slots across 0xF6..0xFB frames
+	// Per-key upload geometry. Single source of truth; agent-context
+	// and frame builders must derive from these, never re-hardcode 6/18.
+	PerKeyFrames   = 6
+	KeysPerFrame   = SlotCount / PerKeyFrames // 18
+	PerKeyFrameLen = KeysPerFrame * 3         // 54 payload bytes
 )
 
 // Magic is the little-endian 0x33CC55AA frame prefix.
@@ -116,7 +121,7 @@ func ModeList() string {
 		}
 		fmt.Fprintf(&b, "%d=%s", i, ModeNames[i])
 	}
-	b.WriteString(", 24=custom (per-key)")
+	b.WriteString(", 23=custom (per-key, alias of 24), 24=custom (per-key)")
 	return b.String()
 }
 
@@ -124,7 +129,8 @@ func ModeList() string {
 var ErrUsage = errors.New("usage error")
 
 // Palette maps colorindex values (0x07 payload byte 5) to colors.
-// Verified live 2026-10-11: static mode, colorindex 0..7.
+// "lightblue" is a deprecated alias for cyan (index 5); it resolves but
+// is omitted from PaletteList to keep the enumerated values stable.
 var Palette = map[string]byte{
 	"red": 0, "green": 1, "blue": 2, "yellow": 3,
 	"purple": 4, "cyan": 5, "lightblue": 5, "white": 6, "rainbow": 7,
@@ -178,6 +184,9 @@ func ParseColor(s string) (r, g, b byte, err error) {
 
 // ParseU32 parses decimal, or hex when the value carries a 0x/0X prefix.
 func ParseU32(s string) (uint32, error) {
+	if s == "" {
+		return 0, fmt.Errorf("%w: invalid number %q (empty)", ErrUsage, s)
+	}
 	if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
 		var v uint64
 		h := s[2:]

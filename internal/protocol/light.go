@@ -13,6 +13,13 @@ func BuildModeFrames(args []string) ([][]byte, map[string]any, error) {
 	if err != nil || !ValidMode(mode) {
 		return nil, nil, fmt.Errorf("%w: invalid mode %q; valid: %s", ErrUsage, args[0], ModeList())
 	}
+	// Mode 23 is accepted as an alias of 24: the vendor doc lists 23/24
+	// as the custom per-key path while the wire sequence sends mode-1=23.
+	// Normalizing here keeps one wire encoding for the custom path.
+	effectiveMode := mode
+	if effectiveMode == 23 {
+		effectiveMode = CustomMode
+	}
 	brightness, speed, direction := 5, 4, 0
 	colorIdx := -1
 	noApply := false
@@ -44,16 +51,16 @@ func BuildModeFrames(args []string) ([][]byte, map[string]any, error) {
 	if colorIdx < 0 {
 		colorIdx = 7 // driver default (rainbow)
 	}
-	payload := []byte{byte(mode - 1), byte(brightness - 1), byte(speed - 1), byte(direction), byte(colorIdx)}
+	payload := []byte{byte(effectiveMode - 1), byte(brightness - 1), byte(speed - 1), byte(direction), byte(colorIdx)}
 	frames := [][]byte{Frame(CmdSetLightMode, payload)}
-	if mode == CustomMode {
+	if effectiveMode == CustomMode {
 		frames = append(frames, Frame(CmdCustomModeInit, nil))
 	}
 	if !noApply {
 		frames = append(frames, Frame(CmdApply, nil))
 	}
 	name := ModeNames[mode]
-	if name == "" && mode == CustomMode {
+	if name == "" && (mode == CustomMode || mode == 23) {
 		name = "custom (per-key)"
 	}
 	colorName := "rainbow"
@@ -69,7 +76,7 @@ func BuildModeFrames(args []string) ([][]byte, map[string]any, error) {
 	return frames, desc, nil
 }
 
-func ValidMode(m int) bool { return (m >= MinMode && m <= MaxMode) || m == CustomMode }
+func ValidMode(m int) bool { return (m >= MinMode && m <= MaxMode) || m == 23 || m == CustomMode }
 
 func parseRange(args []string, i *int, min, max int, what string) (int, error) {
 	if *i+1 >= len(args) {

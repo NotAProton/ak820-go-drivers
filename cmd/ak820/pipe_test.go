@@ -33,3 +33,13 @@ func TestParsePipeLine(t *testing.T) {
 		t.Fatal("oversized payload accepted")
 	}
 }
+
+func TestParsePipeLineSpaces(t *testing.T) {
+	cmd, payload, err := parsePipeLine("09 aa bb cc")
+	if err != nil || cmd != 0x09 || len(payload) != 3 {
+		t.Fatalf("spaced payload: cmd=%02x payload=%x err=%v", cmd, payload, err)
+	}
+	if _, _, err := parsePipeLine(""); err == nil {
+		t.Fatal("empty line accepted")
+	}
+}

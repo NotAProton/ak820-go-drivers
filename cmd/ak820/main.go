@@ -49,7 +49,7 @@ Commands:
   ping                        Handshake check (0x0F)
   get battery                 Battery percent + connection state
   get info                    dev.Device node, bus, interface details
-  set mode N                  Light mode; N: 1-22 (named), 24=custom per-key
+  set mode N                  Light mode; N: 1-22 (named), 23/24=custom per-key (23 aliases 24)
       [--brightness 1-5] [--speed 1-5] [--direction 0-3]
       [--color red|green|blue|yellow|purple|cyan|white|rainbow] [--no-apply]
   set key NAME=COLOR ...      Custom per-key colors (mode 24), e.g.
@@ -67,7 +67,7 @@ Commands:
   version                     Print version
 
 Global flags:
-  --device PATH    hidraw node (precedence: flag > $AK820_DEVICE > auto-detect)
+  --device PATH    hidraw node (--device=PATH also works; precedence: flag > $AK820_DEVICE > auto-detect)
   --json           Structured JSON on stdout for every data command
   --quiet          Suppress frame logging (stderr)
   --timeout DUR    Per-command device timeout (default 1.2s)
@@ -87,7 +87,9 @@ func emit(v any) {
 	if gv.json {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
-		_ = enc.Encode(v)
+		if err := enc.Encode(v); err != nil {
+			fmt.Fprintf(stderr, "error writing stdout: %v\n", err)
+		}
 	}
 }
 
@@ -100,7 +102,7 @@ func logf(format string, a ...any) {
 func failJSON(err error) {
 	if gv.json {
 		enc := json.NewEncoder(stdout)
-		_ = enc.Encode(map[string]any{"ok": false, "error": err.Error()})
+		_ = enc.Encode(map[string]any{"ok": false, "error": err.Error()}) // best-effort error envelope
 	}
 	fmt.Fprintln(stderr, "error:", err.Error())
 }
@@ -141,6 +143,9 @@ func sendFrames(d *dev.Device, frames [][]byte, label string, waitLast bool) err
 		return nil
 	}
 	for i, f := range frames {
+		if i > 0 {
+			time.Sleep(20 * time.Millisecond)
+		}
 		if waitLast && i == len(frames)-1 {
 			_, err := d.Send(f[4], f[5:], gv.timeout)
 			if err != nil {
@@ -198,7 +203,7 @@ func cmdList() int {
 		return exitOK
 	}
 	if len(nodes) == 0 {
-		fmt.Println("no AK820 devices found (plug in via USB, or use the 2.4G dongle)")
+		fmt.Fprintln(stderr, "no AK820 devices found (plug in via USB, or use the 2.4G dongle)")
 		return exitOK
 	}
 	for _, n := range nodes {
@@ -209,29 +214,41 @@ func cmdList() int {
 				status += " (" + n.Err + ")"
 			}
 		}
-		fmt.Printf("%-14s %-10s if=%-3s %s\n", n.Path, n.Bus, n.Interface, status)
+		fmt.Fprintf(stdout, "%-14s %-10s if=%-3s %s\n", n.Path, n.Bus, n.Interface, status)
 	}
 	return exitOK
 }
 
 func cmdPing(d *dev.Device) int {
-	rx, err := d.Send(p.CmdHandshake, nil, gv.timeout)
-	if err != nil {
+	if gv.dryRun {
+		logf("DRY-RUN ping TX %x", p.Frame(p.CmdHandshake, nil))
+		emit(map[string]any{"ok": true, "dry_run": true, "pong": false})
+		if !gv.json {
+			fmt.Fprintln(stdout, "sent (0x0F does not reply)")
+		}
+		return exitOK
+	}
+	if _, err := d.Send(p.CmdHandshake, nil, 0); err != nil {
 		return deviceErr(err)
 	}
 	emit(map[string]any{
 		"ok":    true,
-		"pong":  len(rx) > 0,
-		"reply": fmt.Sprintf("%x", rx),
+		"pong":  false,
+		"reply": "",
 		"note":  "0x0F is fire-and-forget in the vendor driver; no reply is normal",
 	})
 	if !gv.json {
-		fmt.Println("sent (0x0F does not reply)")
+		fmt.Fprintln(stdout, "sent (0x0F does not reply)")
 	}
 	return exitOK
 }
 
 func cmdGetBattery(d *dev.Device) int {
+	if gv.dryRun {
+		logf("DRY-RUN get-battery TX %x", p.Frame(p.CmdBattery, nil))
+		emit(map[string]any{"ok": true, "dry_run": true})
+		return exitOK
+	}
 	rx, err := d.Send(p.CmdBattery, nil, gv.timeout)
 	if err != nil {
 		return deviceErr(err)
@@ -247,7 +264,7 @@ func cmdGetBattery(d *dev.Device) int {
 	emit(map[string]any{"ok": true, "percent": pct, "connection": connStr,
 		"raw_conn": fmt.Sprintf("0x%02x", conn)})
 	if !gv.json {
-		fmt.Printf("%d%% (%s)\n", pct, connStr)
+		fmt.Fprintf(stdout, "%d%% (%s)\n", pct, connStr)
 	}
 	return exitOK
 }
@@ -257,7 +274,7 @@ func cmdGetInfo(node *dev.Node) int {
 		"interface": node.Interface, "nodes": dev.DiscoverNodes(),
 		"protocol": "AA55CC33-framed vendor HID, 64-byte reports, usage page 0xFF02"})
 	if !gv.json {
-		fmt.Printf("device: %s (%s)\n", node.Path, node.Bus)
+		fmt.Fprintf(stdout, "device: %s (%s)\n", node.Path, node.Bus)
 	}
 	return exitOK
 }
@@ -267,7 +284,7 @@ func cmdSetSimple(d *dev.Device, cmd byte, v, min, max int, what string, key str
 		return nil, fmt.Errorf("%w: %s must be %d-%d, got %d", p.ErrUsage, what, min, max, v)
 	}
 	fs := [][]byte{p.Frame(cmd, []byte{byte(v)}), p.Frame(p.CmdApply, nil)}
-	if err := sendFrames(d, fs, "set-"+what, true); err != nil {
+	if err := sendFrames(d, fs, "set-"+what, false); err != nil {
 		return nil, err
 	}
 	return map[string]any{"ok": true, "dry_run": gv.dryRun, key: v, "frames": framesHex(fs)}, nil
@@ -277,14 +294,20 @@ func cmdSetKey(d *dev.Device, args []string) (any, error) {
 	if len(args) == 0 {
 		return nil, fmt.Errorf("%w: set key requires at least one NAME=COLOR pair (e.g. esc=ff0000 space=green); key names: %s", p.ErrUsage, keyList())
 	}
-	var slots [][3]byte = make([][3]byte, 108)
+	var slots [][3]byte = make([][3]byte, p.SlotCount)
 	var set []string
+	seen := map[string]bool{}
 	for _, a := range args {
 		parts := strings.SplitN(a, "=", 2)
 		if len(parts) != 2 {
 			return nil, fmt.Errorf("%w: expected NAME=COLOR, got %q", p.ErrUsage, a)
 		}
-		idx, ok := p.KeyIndex[strings.ToLower(parts[0])]
+		lower := strings.ToLower(parts[0])
+		if seen[lower] {
+			return nil, fmt.Errorf("%w: duplicate key %q (each key may appear once)", p.ErrUsage, parts[0])
+		}
+		seen[lower] = true
+		idx, ok := p.KeyIndex[lower]
 		if !ok {
 			return nil, fmt.Errorf("%w: unknown key %q; valid: %s", p.ErrUsage, parts[0], keyList())
 		}
@@ -295,12 +318,8 @@ func cmdSetKey(d *dev.Device, args []string) (any, error) {
 		slots[idx] = rgb
 		set = append(set, fmt.Sprintf("%s(slot %d)=%02x%02x%02x", parts[0], idx, rgb[0], rgb[1], rgb[2]))
 	}
-	modeFrames := [][]byte{
-		p.Frame(p.CmdSetLightMode, []byte{0x17, 4, 3, 0, 0}), // mode 24 custom
-		p.Frame(p.CmdCustomModeInit, nil),
-		p.Frame(p.CmdApply, nil),
-	}
-	frames := append(modeFrames, p.BuildPerKeyFrames(slots)...)
+	// Defaults match BuildModeFrames (brightness 5 -> 4, speed 4 -> 3).
+	frames := p.BuildCustomModeFrames(slots, 4, 3)
 	if err := sendFrames(d, frames, "set-key", false); err != nil {
 		return nil, err
 	}
@@ -326,14 +345,18 @@ func keyList() string {
 
 func cmdFnSwitch(d *dev.Device) (any, error) {
 	frames := [][]byte{p.Frame(p.CmdFnSwitch, nil)}
-	if err := sendFrames(d, frames, "fnswitch", true); err != nil {
+	if gv.dryRun {
+		return map[string]any{"ok": true, "dry_run": true, "note": "0x10 toggles the keyboard's Fn-switch state; no ACK", "frames": framesHex(frames)}, nil
+	}
+	// 0x10 has no observable ACK; fire-and-forget.
+	if err := sendFrames(d, frames, "fnswitch", false); err != nil {
 		return nil, err
 	}
 	return map[string]any{"ok": true, "dry_run": gv.dryRun, "note": "0x10 toggles the keyboard's Fn-switch state; no ACK"}, nil
 }
 
 func cmdRaw(d *dev.Device, args []string) (any, error) {
-	if !gv.yes {
+	if !gv.yes && !gv.dryRun {
 		return nil, fmt.Errorf("%w: raw sends arbitrary frames to the keyboard; confirm with --yes", p.ErrUsage)
 	}
 	var cmdByte byte
@@ -372,6 +395,11 @@ func cmdRaw(d *dev.Device, args []string) (any, error) {
 	if len(data) > p.FrameSize-5 {
 		return nil, fmt.Errorf("%w: payload max %d bytes, got %d", p.ErrUsage, p.FrameSize-5, len(data))
 	}
+	if gv.dryRun {
+		f := p.Frame(cmdByte, data)
+		logf("DRY-RUN raw TX %x", f)
+		return map[string]any{"ok": true, "dry_run": true, "cmd": fmt.Sprintf("0x%02x", cmdByte), "frame": fmt.Sprintf("%x", f)}, nil
+	}
 	rx, err := d.Send(cmdByte, data, gv.timeout)
 	if err != nil {
 		return nil, err
@@ -380,11 +408,12 @@ func cmdRaw(d *dev.Device, args []string) (any, error) {
 }
 
 func cmdReset(d *dev.Device) (any, error) {
-	if !gv.yes {
+	if !gv.yes && !gv.dryRun {
 		return nil, fmt.Errorf("%w: factory reset erases ALL keyboard settings; confirm with --yes", p.ErrUsage)
 	}
 	fs := [][]byte{p.Frame(p.CmdFactoryReset, nil)}
-	if err := sendFrames(d, fs, "reset", true); err != nil {
+	// The reset frame has no reliable reply; do not burn --timeout waiting.
+	if err := sendFrames(d, fs, "reset", false); err != nil {
 		return nil, err
 	}
 	return map[string]any{"ok": true, "dry_run": gv.dryRun, "reset": "sent (firmware may need a few seconds)"}, nil
@@ -409,7 +438,7 @@ func cmdAgentContext() int {
 			{"name": "list", "json": true},
 			{"name": "ping", "json": true},
 			{"name": "get", "args": "battery|info", "json": true},
-			{"name": "set mode", "args": "1-22|24 [--brightness 1-5] [--speed 1-5] [--direction 0-3] [--color red|green|blue|yellow|purple|cyan|white|rainbow] [--no-apply]", "json": true},
+			{"name": "set mode", "args": "1-22|23|24 [--brightness 1-5] [--speed 1-5] [--direction 0-3] [--color red|green|blue|yellow|purple|cyan|white|rainbow] [--no-apply]", "json": true},
 			{"name": "set key", "args": "name=color [name=color ...] (mode 24; palette names or RRGGBB)", "json": true},
 			{"name": "set sleep-time", "args": "1-4", "json": true, "experimental": true},
 			{"name": "set response-time", "args": "1-3", "json": true, "experimental": true},
@@ -474,28 +503,49 @@ func run(args []string) int {
 			gv.dryRun = true
 		case a == "--yes" || a == "-y":
 			gv.yes = true
-		case a == "--device":
-			if i+1 >= len(args) {
-				return usageErr("--device needs a path")
+		case a == "--device" || len(a) > 9 && a[:9] == "--device=":
+			v := ""
+			if len(a) > 9 && a[:9] == "--device=" {
+				v = a[9:]
+				if v == "" {
+					return usageErr("--device needs a path")
+				}
+			} else {
+				if i+1 >= len(args) {
+					return usageErr("--device needs a path")
+				}
+				i++
+				v = args[i]
 			}
-			i++
-			gv.device = args[i]
-		case a == "--timeout":
-			if i+1 >= len(args) {
-				return usageErr("--timeout needs a duration")
+			gv.device = v
+		case a == "--timeout" || len(a) > 10 && a[:10] == "--timeout=":
+			s := ""
+			if len(a) > 10 && a[:10] == "--timeout=" {
+				s = a[10:]
+			} else {
+				if i+1 >= len(args) {
+					return usageErr("--timeout needs a duration")
+				}
+				i++
+				s = args[i]
 			}
-			i++
-			d, err := parseDuration(args[i])
+			d, err := parseDuration(s)
 			if err != nil {
 				return usageErr("%v", err)
 			}
 			gv.timeout = d
-		case a == "--wait":
-			if i+1 >= len(args) {
-				return usageErr("--wait needs a duration")
+		case a == "--wait" || len(a) > 7 && a[:7] == "--wait=":
+			s := ""
+			if len(a) > 7 && a[:7] == "--wait=" {
+				s = a[7:]
+			} else {
+				if i+1 >= len(args) {
+					return usageErr("--wait needs a duration")
+				}
+				i++
+				s = args[i]
 			}
-			i++
-			d, err := parseDuration(args[i])
+			d, err := parseDuration(s)
 			if err != nil {
 				return usageErr("%v", err)
 			}
@@ -518,7 +568,7 @@ func run(args []string) int {
 		if gv.json {
 			emit(map[string]any{"ok": true, "version": version})
 		} else {
-			fmt.Println("ak820", version)
+			fmt.Fprintln(stdout, "ak820", version)
 		}
 		return exitOK
 	case "help", "--help", "-h":
@@ -531,10 +581,24 @@ func run(args []string) int {
 		return usageErr("unknown command %q; valid: list ping get set apply reset raw fnswitch pipe agent-context version", cmdArgs[0])
 	}
 
-	// dev.Device commands. Reads run against the real device even in dry-run;
-	// mutations are converted to frame dumps by sendFrames when gv.dryRun.
-	// Dry-run must not require the device to exist.
-	needsDevice := !(gv.dryRun && (cmdArgs[0] == "set" || cmdArgs[0] == "apply" || cmdArgs[0] == "reset" || cmdArgs[0] == "raw"))
+	rest := cmdArgs[1:]
+	if cmdArgs[0] == "set" && len(rest) >= 1 && (rest[0] == "sleep-time" || rest[0] == "response-time") && len(rest) != 2 {
+		what := rest[0]
+		if what == "sleep-time" {
+			return usageErr("set sleep-time takes exactly one value 1-4 (1=5min 2=15min 3=30min 4=never), got %q", rest[1:])
+		}
+		return usageErr("set response-time takes exactly one value 1-3 (1=fast 2=medium 3=slow), got %q", rest[1:])
+	}
+	for _, a := range rest {
+		if a == "--help" || a == "-h" || a == "help" {
+			fmt.Fprint(stdout, usage())
+			return exitOK
+		}
+	}
+
+	// Every device handler is dry-run safe (frame dumps, no I/O), so dry-run
+	// never requires the device to exist.
+	needsDevice := !gv.dryRun
 
 	var d *dev.Device
 	if needsDevice {
@@ -545,8 +609,6 @@ func run(args []string) int {
 		}
 		defer d.Close()
 	}
-
-	rest := cmdArgs[1:]
 	switch cmdArgs[0] {
 	case "ping":
 		return cmdPing(d)
@@ -560,7 +622,11 @@ func run(args []string) int {
 		case "info":
 			node, err := dev.PickDevice(gv.device)
 			if err != nil {
-				return notFoundErr(err)
+				var nf *dev.DeviceNotFoundError
+				if errors.As(err, &nf) {
+					return notFoundErr(err)
+				}
+				return deviceErr(err)
 			}
 			return cmdGetInfo(&node)
 		default:
@@ -582,19 +648,25 @@ func run(args []string) int {
 			if err != nil {
 				break
 			}
-			err = sendFrames(d, frames, "set-mode", true)
+			err = sendFrames(d, frames, "set-mode", false)
 			if err != nil {
 				break
 			}
 			out = map[string]any{"ok": true, "dry_run": gv.dryRun, "set": desc, "frames": framesHex(frames)}
 		case "sleep-time":
-			v, e := strconv.Atoi(firstArg(rest[1:]))
+			if len(rest) != 2 {
+				return usageErr("set sleep-time takes exactly one value 1-4 (1=5min 2=15min 3=30min 4=never), got %q", rest[1:])
+			}
+			v, e := strconv.Atoi(rest[1])
 			if e != nil {
 				return usageErr("set sleep-time requires 1-4 (1=5min 2=15min 3=30min 4=never)")
 			}
 			out, err = cmdSetSimple(d, p.CmdSleepTime, v, 1, 4, "sleep-time", "sleep_time")
 		case "response-time":
-			v, e := strconv.Atoi(firstArg(rest[1:]))
+			if len(rest) != 2 {
+				return usageErr("set response-time takes exactly one value 1-3 (1=fast 2=medium 3=slow), got %q", rest[1:])
+			}
+			v, e := strconv.Atoi(rest[1])
 			if e != nil {
 				return usageErr("set response-time requires 1-3 (1=fast 2=medium 3=slow)")
 			}
@@ -610,7 +682,7 @@ func run(args []string) int {
 		}
 		emit(out)
 		if !gv.json {
-			fmt.Printf("set %s done\n", rest[0])
+			fmt.Fprintf(stdout, "set %s done\n", rest[0])
 		}
 		return exitOK
 	case "apply":
@@ -619,7 +691,7 @@ func run(args []string) int {
 		}
 		emit(map[string]any{"ok": true, "applied": true, "dry_run": gv.dryRun})
 		if !gv.json {
-			fmt.Println("committed (0x09)")
+			fmt.Fprintln(stdout, "committed (0x09)")
 		}
 		return exitOK
 	case "fnswitch":
@@ -629,7 +701,7 @@ func run(args []string) int {
 		}
 		emit(out)
 		if !gv.json {
-			fmt.Println("fn-switch toggled (0x10)")
+			fmt.Fprintln(stdout, "fn-switch toggled (0x10)")
 		}
 		return exitOK
 	case "reset":
@@ -642,7 +714,7 @@ func run(args []string) int {
 		}
 		emit(out)
 		if !gv.json {
-			fmt.Println("factory reset sent")
+			fmt.Fprintln(stdout, "factory reset sent")
 		}
 		return exitOK
 	case "raw":
@@ -656,7 +728,11 @@ func run(args []string) int {
 		emit(out)
 		if !gv.json {
 			m := out.(map[string]any)
-			fmt.Printf("sent %s, reply: %s\n", m["cmd"], m["reply"])
+			if gv.dryRun {
+				fmt.Fprintf(stdout, "sent %s (dry-run)\n", m["cmd"])
+			} else {
+				fmt.Fprintf(stdout, "sent %s, reply: %s\n", m["cmd"], m["reply"])
+			}
 		}
 		return exitOK
 	}
